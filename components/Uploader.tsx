@@ -1,6 +1,8 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { GlassButton, GlassCard, GlassInput, GlassMenu, GlassSegmented, GlassSheet, GlassSwitch } from '@zakisheriff/liquid-glass';
+import { GlassButton, GlassCard, GlassInput, GlassMenu, GlassNav, GlassSegmented, GlassSheet, GlassSwitch } from '@zakisheriff/liquid-glass';
+import { SettingsSheet, Wallpaper, useAppearance } from './Settings';
+import { CheckIcon, ChevronIcon, CommitIcon, FolderIcon, GearIcon, GitHubIcon, ShieldIcon, UploadIcon } from './icons';
 import { GhError, createRepo, commitFiles, gh, makePlan, type Plan } from '@/lib/github';
 import { LIMITS, commonRoot, readZip, type Entry, type Skipped } from '@/lib/zip';
 
@@ -11,6 +13,11 @@ const mb = (n: number) => (n / 1048576).toFixed(1) + ' MB';
 
 export default function Uploader() {
   const [user, setUser] = useState<string | null>(null);
+  const [avatar, setAvatar] = useState('');
+  const [tab, setTab] = useState(0);
+  const [settings, setSettings] = useState(false);
+  const [over, setOver] = useState(false);
+  const ap = useAppearance();
   const [checking, setChecking] = useState(true);
   const [authErr, setAuthErr] = useState('');
   const [raw, setRaw] = useState<Entry[]>([]);
@@ -38,7 +45,7 @@ export default function Uploader() {
   useEffect(() => {
     const q = new URLSearchParams(location.search).get('error');
     if (q) setAuthErr('Sign-in failed. Please try again.');
-    gh<{ login: string }>('user', {}, 0).then((u) => setUser(u.login)).catch(() => {}).finally(() => setChecking(false));
+    gh<{ login: string; avatar_url: string }>('user', {}, 0).then((u) => { setUser(u.login); setAvatar(u.avatar_url); }).catch(() => {}).finally(() => setChecking(false));
   }, []);
 
   useEffect(() => {
@@ -124,116 +131,169 @@ export default function Uploader() {
 
   async function logout() {
     await fetch('/api/auth/logout', { method: 'POST' });
-    setUser(null); setRepos([]); setRepo(null); setRaw([]); setResult(null);
+    setSettings(false); setUser(null); setRepos([]); setTab(0); setRepo(null); setRaw([]); setResult(null);
   }
 
   const pct = prog.total ? Math.round((prog.done / prog.total) * 100) : 0;
+  const dest = mode === 0 ? (newName || '—') : (repo?.full_name || '—');
+  const header = (
+    <GlassCard padding="10px 14px" radius="24px">
+      <div className="row" style={{ flexWrap: 'nowrap' }}>
+        <div className="brand">
+          {avatar ? <img className="avatar" src={avatar} alt="" width={30} height={30} /> : <GitHubIcon size={28} />}
+          <div><h1>Zip to GitHub</h1>{user && <small>@{user}</small>}</div>
+        </div>
+        <GlassButton variant="clear" size="md" icon={<GearIcon />} onClick={() => setSettings(true)} aria-label="Settings" />
+      </div>
+    </GlassCard>
+  );
+  const shell = (body: React.ReactNode) => (
+    <>
+      <Wallpaper a={ap.a} img={ap.img} />
+      <main>{header}{body}</main>
+      <SettingsSheet open={settings} onClose={() => setSettings(false)} ap={ap} user={user} onSignOut={logout} />
+    </>
+  );
 
-  if (checking) return <main><p>Loading…</p></main>;
+  if (checking) return shell(<GlassCard><p>Loading…</p></GlassCard>);
   if (!user) {
-    return (
-      <main>
-        <h1>Zip to GitHub</h1>
-        <GlassCard>
-          <div className="stack">
-            <h2>Sign in</h2>
-            <p>Sign in with GitHub to upload a project zip to a repository. Your token stays on the server.</p>
-            {authErr && <div className="err" role="alert">{authErr}</div>}
-            <GlassButton variant="filled" size="lg" onClick={() => (location.href = '/api/auth/login')}>Sign in with GitHub</GlassButton>
+    return shell(
+      <GlassCard padding="28px 22px">
+        <div className="hero">
+          <GitHubIcon size={56} />
+          <h2>Ship a zip to GitHub</h2>
+          <p>Upload a project zip, preview every file, and commit the full folder structure in one go.</p>
+          <div className="feat">
+            <span><UploadIcon size={18} /> Works from phone or desktop</span>
+            <span><FolderIcon /> Keeps nested folders and filenames</span>
+            <span><ShieldIcon /> Your token stays on the server</span>
           </div>
-        </GlassCard>
-      </main>
+          {authErr && <div className="err" role="alert">{authErr}</div>}
+          <GlassButton variant="filled" size="lg" onClick={() => (location.href = '/api/auth/login')}>
+            <span className="btn"><GitHubIcon size={18} /> Sign in with GitHub</span>
+          </GlassButton>
+        </div>
+      </GlassCard>,
     );
   }
 
+  const nav = [
+    { label: 'Zip', icon: <UploadIcon /> },
+    { label: 'Repo', icon: <FolderIcon /> },
+    { label: 'Commit', icon: <CommitIcon /> },
+  ];
+
   return (
-    <main>
-      <div className="row">
-        <h1>Zip to GitHub</h1>
-        <GlassButton size="sm" variant="clear" onClick={logout} aria-label={`Sign out ${user}`}>Sign out ({user})</GlassButton>
-      </div>
+    <>
+      <Wallpaper a={ap.a} img={ap.img} />
+      <main>
+        {header}
 
-      <GlassCard>
-        <div className="stack">
-          <h2>1. Project zip</h2>
-          <input ref={fileRef} type="file" accept=".zip,application/zip" onChange={(e) => onZip(e.target.files?.[0])} aria-label="Choose zip file" />
-          <GlassButton variant="filled" onClick={() => fileRef.current?.click()} disabled={!!busy}>{raw.length ? 'Choose a different zip' : 'Choose zip'}</GlassButton>
-          {raw.length > 0 && (
-            <>
-              <p>{zipName}: {files.length} files, {mb(total)}{skipped.length ? `, ${skipped.length} skipped` : ''}</p>
-              {root && (
-                <div className="row"><span>Remove top folder “{root}”</span><GlassSwitch checked={strip} onChange={setStrip} aria-label={`Remove top folder ${root}`} /></div>
-              )}
-              {skipped.length > 0 && <p className="err">Skipped: {skipped.slice(0, 3).map((s) => `${s.path} (${s.reason})`).join(', ')}{skipped.length > 3 ? '…' : ''}</p>}
-            </>
-          )}
-        </div>
-      </GlassCard>
-
-      <GlassCard>
-        <div className="stack">
-          <h2>2. Destination</h2>
-          <GlassSegmented options={['New repo', 'Existing repo']} value={mode} onChange={setMode} aria-label="Repository mode" />
-          {mode === 0 ? (
-            <>
-              <GlassInput label="Repository name" value={newName} onChange={(e) => setNewName(e.target.value)} autoCapitalize="none" autoCorrect="off" />
-              <div className="row"><span>Private repository</span><GlassSwitch checked={priv} onChange={setPriv} aria-label="Private repository" /></div>
-            </>
-          ) : (
-            <>
-              <GlassInput type="search" placeholder="Search your repositories" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Search repositories" />
-              <div className="pick">
-                {shown.map((r) => (
-                  <GlassButton key={r.full_name} size="sm" variant={repo?.full_name === r.full_name ? 'filled' : 'clear'} onClick={() => setRepo(r)}>
-                    {r.full_name}{r.private ? ' 🔒' : ''}
-                  </GlassButton>
-                ))}
-                {!shown.length && <p>No repositories found.</p>}
+        {tab === 0 && (
+          <GlassCard>
+            <div className="stack">
+              <h2>Project zip</h2>
+              <input ref={fileRef} type="file" accept=".zip,application/zip" hidden onChange={(e) => onZip(e.target.files?.[0])} aria-label="Choose zip file" />
+              <div className={'drop' + (over ? ' over' : '')} role="button" tabIndex={0} aria-label="Choose or drop a zip file"
+                onClick={() => fileRef.current?.click()}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileRef.current?.click(); } }}
+                onDragOver={(e) => { e.preventDefault(); setOver(true); }} onDragLeave={() => setOver(false)}
+                onDrop={(e) => { e.preventDefault(); setOver(false); onZip(e.dataTransfer.files?.[0]); }}>
+                <UploadIcon size={30} />
+                <strong>{busy || (raw.length ? zipName : 'Choose or drop a .zip')}</strong>
+                <p>{raw.length ? 'Tap to pick a different zip' : `Up to ${mb(LIMITS.maxZip)}, files up to 3 MB each`}</p>
               </div>
-            </>
-          )}
-          <div className="row" style={{ flexWrap: 'nowrap' }}>
-            <div style={{ flex: 1 }}><GlassInput label="Branch" value={branch} onChange={(e) => setBranch(e.target.value)} autoCapitalize="none" autoCorrect="off" /></div>
-            {mode === 1 && branches.length > 0 && (
-              <GlassMenu icon={<span aria-hidden>▾</span>} aria-label="Pick an existing branch"
-                items={branches.slice(0, 30).map((b) => ({ label: b, checked: b === branch, onSelect: () => setBranch(b) }))} />
-            )}
-          </div>
-          {mode === 1 && repo && branch && !branches.includes(branch) && branches.length > 0 && <p>“{branch}” doesn’t exist yet and will be created from {repo.default_branch}.</p>}
-        </div>
-      </GlassCard>
+              {error && tab === 0 && <div className="err" role="alert">{error}</div>}
+              {raw.length > 0 && (
+                <>
+                  <div className="chips"><span className="chip">{files.length} files</span><span className="chip">{mb(total)}</span>{skipped.length > 0 && <span className="chip">{skipped.length} skipped</span>}</div>
+                  {root && <div className="row"><span>Remove top folder “{root}”</span><GlassSwitch checked={strip} onChange={setStrip} aria-label={`Remove top folder ${root}`} /></div>}
+                  {skipped.length > 0 && <p className="err">Skipped: {skipped.slice(0, 3).map((s) => `${s.path} (${s.reason})`).join(', ')}{skipped.length > 3 ? '…' : ''}</p>}
+                  <div className="list" tabIndex={0} aria-label="First files in the zip">{files.slice(0, 8).map((f) => <span key={f.path}>{f.path}</span>)}{files.length > 8 && <span>…and {files.length - 8} more</span>}</div>
+                  <GlassButton variant="filled" size="lg" onClick={() => setTab(1)}>Next: choose repository</GlassButton>
+                </>
+              )}
+            </div>
+          </GlassCard>
+        )}
 
-      <GlassCard>
-        <div className="stack">
-          <h2>3. Commit</h2>
-          <GlassInput label="Commit message" value={message} onChange={(e) => setMessage(e.target.value)} />
-          <GlassButton variant="filled" size="lg" onClick={review} disabled={!!busy}>{busy || 'Preview files'}</GlassButton>
-          {busy && prog.label && (
-            <div role="status" aria-live="polite">
-              <div className="bar"><i style={{ width: `${pct}%` }} /></div>
-              <p>{prog.total ? `${prog.done}/${prog.total} · ` : ''}{prog.label}</p>
+        {tab === 1 && (
+          <GlassCard>
+            <div className="stack">
+              <h2>Destination</h2>
+              <GlassSegmented options={['New repo', 'Existing repo']} value={mode} onChange={setMode} aria-label="Repository mode" />
+              {mode === 0 ? (
+                <>
+                  <GlassInput label="Repository name" value={newName} onChange={(e) => setNewName(e.target.value)} autoCapitalize="none" autoCorrect="off" />
+                  <div className="row"><span>Private repository</span><GlassSwitch checked={priv} onChange={setPriv} aria-label="Private repository" /></div>
+                </>
+              ) : (
+                <>
+                  <GlassInput type="search" placeholder="Search your repositories" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Search repositories" />
+                  <div className="pick">
+                    {shown.map((r) => (
+                      <GlassButton key={r.full_name} size="sm" variant={repo?.full_name === r.full_name ? 'filled' : 'clear'} onClick={() => setRepo(r)}>
+                        <span className="btn"><GitHubIcon size={14} /> {r.full_name}{r.private ? ' 🔒' : ''}</span>
+                      </GlassButton>
+                    ))}
+                    {!shown.length && <p>No repositories found.</p>}
+                  </div>
+                </>
+              )}
+              <div className="row" style={{ flexWrap: 'nowrap' }}>
+                <div style={{ flex: 1 }}><GlassInput label="Branch" value={branch} onChange={(e) => setBranch(e.target.value)} autoCapitalize="none" autoCorrect="off" /></div>
+                {mode === 1 && branches.length > 0 && (
+                  <GlassMenu icon={<ChevronIcon />} aria-label="Pick an existing branch"
+                    items={branches.slice(0, 30).map((b) => ({ label: b, checked: b === branch, onSelect: () => setBranch(b) }))} />
+                )}
+              </div>
+              {mode === 1 && repo && branch && branches.length > 0 && !branches.includes(branch) && <p>“{branch}” doesn’t exist yet and will be created from {repo.default_branch}.</p>}
+              <GlassButton variant="filled" size="lg" onClick={() => setTab(2)}>Next: commit</GlassButton>
             </div>
-          )}
-          {error && <div className="err" role="alert">{error}</div>}
-          {result && (
-            <div className="stack" role="status">
-              <span className="ok">Committed successfully.</span>
-              <a href={result.repoUrl} target="_blank" rel="noopener noreferrer">{result.repoUrl}</a>
-              <a href={result.commitUrl} target="_blank" rel="noopener noreferrer">View commit</a>
+          </GlassCard>
+        )}
+
+        {tab === 2 && (
+          <GlassCard>
+            <div className="stack">
+              <h2>Commit</h2>
+              <dl className="kv">
+                <dt>Files</dt><dd>{files.length ? `${files.length} (${mb(total)})` : '—'}</dd>
+                <dt>Repository</dt><dd>{dest}</dd>
+                <dt>Branch</dt><dd>{branch}</dd>
+              </dl>
+              <GlassInput label="Commit message" value={message} onChange={(e) => setMessage(e.target.value)} />
+              <GlassButton variant="filled" size="lg" onClick={review} disabled={!!busy}>
+                <span className="btn"><CommitIcon /> {busy || 'Preview and commit'}</span>
+              </GlassButton>
+              {busy && prog.label && (
+                <div role="status" aria-live="polite">
+                  <div className="bar"><i style={{ width: `${pct}%` }} /></div>
+                  <p>{prog.total ? `${prog.done}/${prog.total} · ` : ''}{prog.label}</p>
+                </div>
+              )}
+              {error && <div className="err" role="alert">{error}</div>}
+              {result && (
+                <div className="stack" role="status">
+                  <span className="ok"><CheckIcon /> Committed successfully</span>
+                  <a href={result.repoUrl} target="_blank" rel="noopener noreferrer">{result.repoUrl}</a>
+                  <a href={result.commitUrl} target="_blank" rel="noopener noreferrer">View commit</a>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      </GlassCard>
+          </GlassCard>
+        )}
+      </main>
+
+      <div className="navwrap"><GlassNav items={nav} activeIndex={tab} onChange={setTab} aria-label="Steps" /></div>
 
       <GlassSheet open={sheet} onClose={() => !busy && setSheet(false)} aria-label="Review files before uploading" detents={['medium', 'large']}>
         <div className="sheet">
           <h2>Review</h2>
           {plan && (
             <>
-              <p>
-                {mode === 0 ? `New repo “${newName}”` : repo?.full_name} · branch {branch}<br />
-                {plan.added.length} new · {plan.changed.length} overwritten · {plan.same} unchanged (skipped)
-              </p>
+              <p>{mode === 0 ? `New repo “${newName}”` : repo?.full_name} · branch {branch}</p>
+              <div className="chips"><span className="chip">{plan.added.length} new</span><span className="chip">{plan.changed.length} overwritten</span><span className="chip">{plan.same} unchanged</span></div>
               {plan.truncated && <p className="err">The repository is very large; overwrite detection may be incomplete.</p>}
               <div className="list" tabIndex={0} aria-label="Files to upload">
                 {plan.added.slice(0, 300).map((f) => <span key={f.path}>+ {f.path}</span>)}
@@ -243,9 +303,7 @@ export default function Uploader() {
               {plan.changed.length > 0 && (
                 <div className="row"><span>Overwrite {plan.changed.length} existing file(s)</span><GlassSwitch checked={overwrite} onChange={setOverwrite} aria-label="Allow overwriting existing files" /></div>
               )}
-              {busy && (
-                <div role="status"><div className="bar"><i style={{ width: `${pct}%` }} /></div><p>{prog.label}</p></div>
-              )}
+              {busy && <div role="status"><div className="bar"><i style={{ width: `${pct}%` }} /></div><p>{prog.label}</p></div>}
               <div className="row">
                 <GlassButton variant="clear" onClick={() => setSheet(false)} disabled={!!busy}>Cancel</GlassButton>
                 <GlassButton variant="filled" onClick={upload} disabled={!!busy || (plan.changed.length > 0 && !overwrite)}>
@@ -256,6 +314,7 @@ export default function Uploader() {
           )}
         </div>
       </GlassSheet>
-    </main>
+      <SettingsSheet open={settings} onClose={() => setSettings(false)} ap={ap} user={user} onSignOut={logout} />
+    </>
   );
 }

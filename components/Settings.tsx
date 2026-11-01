@@ -1,0 +1,109 @@
+'use client';
+import { useEffect, useRef, useState } from 'react';
+import { GlassButton, GlassSegmented, GlassSheet, GlassSlider } from '@zakisheriff/liquid-glass';
+import { DEFAULT_WALLPAPER, WALLPAPERS } from '@/lib/wallpapers';
+import { UploadIcon } from './icons';
+
+export type Appearance = { wall: string; dim: number; theme: number }; // theme: 0 auto, 1 light, 2 dark
+const KEY = 'zg_appearance', IMG = 'zg_wallpaper_img';
+const DEFAULTS: Appearance = { wall: DEFAULT_WALLPAPER, dim: 0, theme: 0 };
+
+export function useAppearance() {
+  const [a, setA] = useState<Appearance>(DEFAULTS);
+  const [img, setImg] = useState<string | null>(null);
+  const [warn, setWarn] = useState('');
+  useEffect(() => {
+    try {
+      const s = localStorage.getItem(KEY); if (s) setA({ ...DEFAULTS, ...JSON.parse(s) });
+      setImg(localStorage.getItem(IMG));
+    } catch {}
+  }, []);
+  useEffect(() => {
+    const r = document.documentElement;
+    if (a.theme === 0) r.removeAttribute('data-theme'); else r.setAttribute('data-theme', a.theme === 1 ? 'light' : 'dark');
+    try { localStorage.setItem(KEY, JSON.stringify(a)); } catch {}
+  }, [a]);
+  const set = (p: Partial<Appearance>) => setA((x) => ({ ...x, ...p }));
+  const saveImg = (d: string | null) => {
+    setWarn(''); setImg(d);
+    try { d ? localStorage.setItem(IMG, d) : localStorage.removeItem(IMG); }
+    catch { setWarn('Photo is too large to remember; it will reset on reload.'); }
+  };
+  return { a, set, img, saveImg, warn, reset: () => { setA(DEFAULTS); saveImg(null); } };
+}
+
+export function Wallpaper({ a, img }: { a: Appearance; img: string | null }) {
+  const custom = a.wall === 'custom' && img;
+  const css = WALLPAPERS.find((w) => w.id === a.wall)?.css ?? WALLPAPERS[0].css;
+  return (
+    <div className="wall" aria-hidden="true">
+      <div className="wall-img" style={custom ? { backgroundImage: `url(${img})` } : { background: css }} />
+      <div className="wall-dim" style={{ opacity: a.dim / 100 }} />
+    </div>
+  );
+}
+
+function downscale(file: File): Promise<string> {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file); const im = new Image();
+    im.onload = () => {
+      const k = Math.min(1, 1600 / Math.max(im.width, im.height));
+      const c = document.createElement('canvas'); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k);
+      c.getContext('2d')!.drawImage(im, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg', 0.82));
+    };
+    im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('Could not read that image.')); };
+    im.src = url;
+  });
+}
+
+export function SettingsSheet(p: {
+  open: boolean; onClose: () => void; ap: ReturnType<typeof useAppearance>; user: string | null; onSignOut: () => void;
+}) {
+  const { a, set, img, saveImg, warn, reset } = p.ap;
+  const [err, setErr] = useState('');
+  const file = useRef<HTMLInputElement>(null);
+  async function pick(f?: File) {
+    if (!f) return; setErr('');
+    if (!f.type.startsWith('image/')) return setErr('Please choose an image file.');
+    try { saveImg(await downscale(f)); set({ wall: 'custom' }); } catch (e: any) { setErr(e.message); }
+    if (file.current) file.current.value = '';
+  }
+  return (
+    <GlassSheet open={p.open} onClose={p.onClose} aria-label="Settings" detents={['medium', 'large']}>
+      <div className="sheet">
+        <h2>Settings</h2>
+        <section className="stack" aria-label="Appearance">
+          <h3>Appearance</h3>
+          <GlassSegmented options={['Auto', 'Light', 'Dark']} value={a.theme} onChange={(theme) => set({ theme })} aria-label="Theme" />
+        </section>
+        <section className="stack" aria-label="Wallpaper">
+          <h3>Wallpaper</h3>
+          <div className="swatches" role="radiogroup" aria-label="Wallpaper">
+            {WALLPAPERS.map((w) => (
+              <button key={w.id} role="radio" aria-checked={a.wall === w.id} aria-label={w.name}
+                className={'swatch' + (a.wall === w.id ? ' on' : '')} style={{ background: w.css }} onClick={() => set({ wall: w.id })}>
+                <span>{w.name}</span>
+              </button>
+            ))}
+            {img && (
+              <button role="radio" aria-checked={a.wall === 'custom'} aria-label="Your photo"
+                className={'swatch' + (a.wall === 'custom' ? ' on' : '')} style={{ backgroundImage: `url(${img})`, backgroundSize: 'cover' }} onClick={() => set({ wall: 'custom' })}>
+                <span>Your photo</span>
+              </button>
+            )}
+          </div>
+          <input ref={file} type="file" accept="image/*" hidden onChange={(e) => pick(e.target.files?.[0])} aria-label="Choose wallpaper photo" />
+          <GlassButton variant="clear" onClick={() => file.current?.click()}><span className="btn"><UploadIcon size={18} /> Use my own photo</span></GlassButton>
+          <GlassSlider value={a.dim} onChange={(dim) => set({ dim })} min={0} max={60} step={1} aria-label="Dim wallpaper" />
+          <p>Dim wallpaper: {a.dim}%</p>
+          {(err || warn) && <div className="err" role="alert">{err || warn}</div>}
+        </section>
+        <div className="row">
+          <GlassButton variant="clear" onClick={reset}>Reset to default</GlassButton>
+          {p.user && <GlassButton destructive onClick={p.onSignOut}>Sign out ({p.user})</GlassButton>}
+        </div>
+      </div>
+    </GlassSheet>
+  );
+}
