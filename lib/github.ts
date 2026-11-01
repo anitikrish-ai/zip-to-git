@@ -42,9 +42,15 @@ export type Plan = { added: Entry[]; changed: Entry[]; same: number; truncated: 
 /** Compares files against the tree of `source` branch so overwrites are shown before committing. */
 export async function makePlan(owner: string, repo: string, source: string, files: Entry[]): Promise<Plan> {
   const R = `repos/${owner}/${repo}`;
-  const ref = await gh<any>(`${R}/git/ref/heads/${source}`);
-  const commit = await gh<any>(`${R}/git/commits/${ref.object.sha}`);
-  const tree = await gh<any>(`${R}/git/trees/${commit.tree.sha}?recursive=1`);
+  let tree: any;
+  try {
+    tree = await gh<any>(`${R}/git/trees/${source.split('/').map(encodeURIComponent).join('/')}?recursive=1`);
+  } catch (e) {
+    if (e instanceof GhError && e.status === 409) throw e; // empty repository
+    const ref = await gh<any>(`${R}/git/ref/heads/${source}`);
+    const commit = await gh<any>(`${R}/git/commits/${ref.object.sha}`);
+    tree = await gh<any>(`${R}/git/trees/${commit.tree.sha}?recursive=1`);
+  }
   const map = new Map<string, string>();
   for (const t of tree.tree) if (t.type === 'blob') map.set(t.path, t.sha);
   const p: Plan = { added: [], changed: [], same: 0, truncated: !!tree.truncated };

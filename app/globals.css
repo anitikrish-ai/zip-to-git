@@ -51,7 +51,15 @@ p { margin: 0; color: var(--muted); font-size: .9rem; line-height: 1.45; }
 .navwrap { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; justify-content: center; padding: 0 16px calc(12px + env(safe-area-inset-bottom)); pointer-events: none; }
 .navwrap > * { pointer-events: auto; max-width: 420px; width: 100%; }
 a { color: inherit; font-weight: 600; word-break: break-all; }
+.step.fwd { animation-name: stepInFwd; }
+.step.back { animation-name: stepInBack; }
 .step { animation: stepIn .38s cubic-bezier(.22,1,.36,1) both; }
 @keyframes stepIn { from { opacity: 0; transform: translateY(10px) scale(.99); } to { opacity: 1; transform: none; } }
+@keyframes stepInFwd { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
+@keyframes stepInBack { from { opacity: 0; transform: translateX(-28px); } to { opacity: 1; transform: none; } }
+.skel { height: 14px; border-radius: 8px; background: linear-gradient(90deg, var(--chip), transparent, var(--chip)); background-size: 200% 100%; animation: shimmer 1.2s linear infinite; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+.list span { content-visibility: auto; contain-intrinsic-size: auto 1.2em; }
+body { overflow-x: clip; }
 @keyframes wallIn { from { opacity: 0; } to { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .bar > i, .drop, .swatch, .wall-dim { transition: none; } .step, .wall-img { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .bar > i, .drop, .swatch, .wall-dim { transition: none; } .step, .wall-img, .skel { animation: none; } }

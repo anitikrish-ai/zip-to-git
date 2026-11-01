@@ -11,6 +11,7 @@ const RULES: Record<string, RegExp[]> = {
     new RegExp(`^repos/${S}/${S}/branches$`),
     new RegExp(`^repos/${S}/${S}/git/ref/heads/${REF}$`),
     new RegExp(`^repos/${S}/${S}/git/(commits|trees)/[0-9a-f]{40}$`),
+    new RegExp(`^repos/${S}/${S}/git/trees/${REF}$`),
   ],
   POST: [
     /^user\/repos$/,

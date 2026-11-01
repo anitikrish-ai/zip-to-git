@@ -1,12 +1,12 @@
 'use client';
-import { memo, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { GlassButton, GlassSegmented, GlassSheet, GlassSlider } from '@zakisheriff/liquid-glass';
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { GlassButton, GlassSegmented, GlassSheet, GlassSlider, setGlassQuality, type GlassQuality } from '@zakisheriff/liquid-glass';
 import { DEFAULT_WALLPAPER, WALLPAPERS } from '@/lib/wallpapers';
 import { UploadIcon } from './icons';
 
-export type Appearance = { wall: string; dim: number; theme: number }; // theme: 0 auto, 1 light, 2 dark
+export type Appearance = { wall: string; dim: number; theme: number; quality: number }; // theme: 0 auto, 1 light, 2 dark
 const KEY = 'zg_appearance', IMG = 'zg_wallpaper_img';
-const DEFAULTS: Appearance = { wall: DEFAULT_WALLPAPER, dim: 0, theme: 0 };
+const DEFAULTS: Appearance = { wall: DEFAULT_WALLPAPER, dim: 0, theme: 0, quality: 0 };
 
 export function useAppearance() {
   const [a, setA] = useState<Appearance>(DEFAULTS);
@@ -22,17 +22,20 @@ export function useAppearance() {
     const r = document.documentElement;
     if (a.theme === 0) r.removeAttribute('data-theme'); else r.setAttribute('data-theme', a.theme === 1 ? 'light' : 'dark');
   }, [a.theme]);
+  useEffect(() => { setGlassQuality((['auto', 'high', 'low'] as GlassQuality[])[a.quality] ?? 'auto'); }, [a.quality]);
   useEffect(() => {
     const t = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(a)); } catch {} }, 250);
     return () => clearTimeout(t);
   }, [a]);
-  const set = (p: Partial<Appearance>) => setA((x) => ({ ...x, ...p }));
-  const saveImg = (d: string | null) => {
-    setWarn(''); setImg(d);
-    try { d ? localStorage.setItem(IMG, d) : localStorage.removeItem(IMG); }
-    catch { setWarn('Photo is too large to remember; it will reset on reload.'); }
-  };
-  return { a, set, img, saveImg, warn, reset: () => { setA(DEFAULTS); saveImg(null); } };
+  return useMemo(() => {
+    const set = (p: Partial<Appearance>) => setA((x) => ({ ...x, ...p }));
+    const saveImg = (d: string | null) => {
+      setWarn(''); setImg(d);
+      try { d ? localStorage.setItem(IMG, d) : localStorage.removeItem(IMG); }
+      catch { setWarn('Photo is too large to remember; it will reset on reload.'); }
+    };
+    return { a, set, img, saveImg, warn, reset: () => { setA(DEFAULTS); saveImg(null); } };
+  }, [a, img, warn]);
 }
 
 type Layer = { key: string; style: CSSProperties };
@@ -43,9 +46,15 @@ export const Wallpaper = memo(function Wallpaper({ a, img }: { a: Appearance; im
   const style: CSSProperties = custom ? { backgroundImage: `url(${img})` } : { background: css };
   const [layers, setLayers] = useState<Layer[]>(() => [{ key, style }]);
   useEffect(() => {
-    setLayers((l) => (l[l.length - 1].key === key ? l : [...l.slice(-1), { key, style }]));
-    const t = setTimeout(() => setLayers((l) => l.slice(-1)), 800); // crossfade, then drop the old layer
-    return () => clearTimeout(t);
+    let dead = false, t: ReturnType<typeof setTimeout>;
+    const apply = () => {
+      if (dead) return;
+      setLayers((l) => (l[l.length - 1].key === key ? l : [...l.slice(-1), { key, style }]));
+      t = setTimeout(() => setLayers((l) => l.slice(-1)), 800); // crossfade, then drop the old layer
+    };
+    if (custom) { const im = new Image(); im.src = img!; im.decode().then(apply, apply); } // decode first: no jank mid-fade
+    else apply();
+    return () => { dead = true; clearTimeout(t); };
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="wall" aria-hidden="true">
@@ -69,7 +78,7 @@ function downscale(file: File): Promise<string> {
   });
 }
 
-export function SettingsSheet(p: {
+export const SettingsSheet = memo(function SettingsSheet(p: {
   open: boolean; onClose: () => void; ap: ReturnType<typeof useAppearance>; user: string | null; onSignOut: () => void;
 }) {
   const { a, set, img, saveImg, warn, reset } = p.ap;
@@ -88,6 +97,11 @@ export function SettingsSheet(p: {
         <section className="stack" aria-label="Appearance">
           <h3>Appearance</h3>
           <GlassSegmented options={['Auto', 'Light', 'Dark']} value={a.theme} onChange={(theme) => set({ theme })} aria-label="Theme" />
+        </section>
+        <section className="stack" aria-label="Glass effects">
+          <h3>Glass effects</h3>
+          <GlassSegmented options={['Auto', 'High', 'Low']} value={a.quality} onChange={(quality) => set({ quality })} aria-label="Glass quality" />
+          <p>Auto adapts to your device. Low keeps blur and edges but only refracts while pressed, which is smoother on older phones.</p>
         </section>
         <section className="stack" aria-label="Wallpaper">
           <h3>Wallpaper</h3>
@@ -118,4 +132,4 @@ export function SettingsSheet(p: {
       </div>
     </GlassSheet>
   );
-}
+});

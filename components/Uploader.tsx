@@ -1,6 +1,6 @@
 'use client';
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { GlassButton, GlassCard, GlassInput, GlassMenu, GlassNav, GlassSegmented, GlassSheet, GlassSwitch } from '@zakisheriff/liquid-glass';
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { GlassButton, GlassCard, GlassInput, GlassMenu, GlassNav, GlassSegmented, GlassSheet, GlassSwitch, haptic } from '@zakisheriff/liquid-glass';
 import { SettingsSheet, Wallpaper, useAppearance } from './Settings';
 import { CheckIcon, ChevronIcon, CommitIcon, FolderIcon, GearIcon, GitHubIcon, ShieldIcon, UploadIcon } from './icons';
 import { GhError, createRepo, commitFiles, gh, makePlan, type Plan } from '@/lib/github';
@@ -11,6 +11,41 @@ const REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
 const BRANCH_RE = /^(?!\/|.*(\.\.|\/\/|@\{|\\))[A-Za-z0-9._\/-]{1,200}(?<![\/.])$/;
 const mb = (n: number) => (n / 1048576).toFixed(1) + ' MB';
 
+
+const NAV = [
+  { label: 'Zip', icon: <UploadIcon /> },
+  { label: 'Repo', icon: <FolderIcon /> },
+  { label: 'Commit', icon: <CommitIcon /> },
+];
+const Steps = memo(function Steps({ tab, onChange }: { tab: number; onChange: (n: number) => void }) {
+  return <div className="navwrap"><GlassNav items={NAV} activeIndex={tab} onChange={onChange} aria-label="Steps" /></div>;
+});
+const Header = memo(function Header({ avatar, user, onSettings }: { avatar: string; user: string | null; onSettings: () => void }) {
+  return (
+    <GlassCard padding="10px 14px" radius="24px">
+      <div className="row" style={{ flexWrap: 'nowrap' }}>
+        <div className="brand">
+          {avatar ? <img className="avatar" decoding="async" src={avatar} alt="" width={30} height={30} /> : <GitHubIcon size={28} />}
+          <div><h1>Zip to GitHub</h1>{user && <small>@{user}</small>}</div>
+        </div>
+        <GlassButton variant="clear" size="md" icon={<GearIcon />} onClick={onSettings} aria-label="Settings" />
+      </div>
+    </GlassCard>
+  );
+});
+const FileList = memo(function FileList({ files }: { files: Entry[] }) {
+  return <div className="list" tabIndex={0} aria-label="First files in the zip">{files.slice(0, 8).map((f) => <span key={f.path}>{f.path}</span>)}{files.length > 8 && <span>…and {files.length - 8} more</span>}</div>;
+});
+const PlanList = memo(function PlanList({ plan }: { plan: Plan }) {
+  return (
+    <div className="list" tabIndex={0} aria-label="Files to upload">
+      {plan.added.slice(0, 300).map((f) => <span key={f.path}>+ {f.path}</span>)}
+      {plan.changed.slice(0, 300).map((f) => <span key={f.path} className="err">~ {f.path}</span>)}
+      {plan.added.length + plan.changed.length > 600 && <span>…and more</span>}
+    </div>
+  );
+});
+
 export default function Uploader() {
   const [user, setUser] = useState<string | null>(null);
   const [avatar, setAvatar] = useState('');
@@ -18,6 +53,16 @@ export default function Uploader() {
   const [settings, setSettings] = useState(false);
   const [over, setOver] = useState(false);
   const ap = useAppearance();
+  const [, startT] = useTransition();
+  const tabRef = useRef(0), dir = useRef(1);
+  const goTab = useCallback((n: number) => {
+    dir.current = n >= tabRef.current ? 1 : -1; tabRef.current = n;
+    startT(() => setTab(n));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    haptic();
+  }, []);
+  const openSettings = useCallback(() => setSettings(true), []);
+  const closeSettings = useCallback(() => setSettings(false), []);
   const [checking, setChecking] = useState(true);
   const [authErr, setAuthErr] = useState('');
   const [raw, setRaw] = useState<Entry[]>([]);
@@ -45,14 +90,12 @@ export default function Uploader() {
   useEffect(() => {
     const q = new URLSearchParams(location.search).get('error');
     if (q) setAuthErr('Sign-in failed. Please try again.');
-    gh<{ login: string; avatar_url: string }>('user', {}, 0).then((u) => { setUser(u.login); setAvatar(u.avatar_url); }).catch(() => {}).finally(() => setChecking(false));
+    try { const c = sessionStorage.getItem('zg_repos'); if (c) setRepos(JSON.parse(c)); } catch {}
+    gh<Repo[]>('user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member', {}, 0)
+      .then((r) => { setRepos(r); try { sessionStorage.setItem('zg_repos', JSON.stringify(r.map((x) => ({ name: x.name, full_name: x.full_name, owner: { login: x.owner.login }, default_branch: x.default_branch, private: x.private })))); } catch {} })
+      .catch((e) => { if (!(e instanceof GhError && e.status === 401)) setError(e.message); });
+    gh<{ login: string; avatar_url: string }>('user', {}, 0).then((u) => { setUser(u.login); setAvatar(u.avatar_url); }).catch(() => { try { sessionStorage.removeItem('zg_repos'); } catch {} setRepos([]); }).finally(() => setChecking(false));
   }, []);
-
-  useEffect(() => {
-    if (!user) return;
-    gh<Repo[]>('user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member')
-      .then(setRepos).catch((e) => setError(e.message));
-  }, [user]);
 
   useEffect(() => {
     if (mode !== 1 || !repo) return;
@@ -129,38 +172,29 @@ export default function Uploader() {
         },
       });
       setSheet(false);
-      setResult({ repoUrl: `${repoUrl}/tree/${branch}`, commitUrl });
+      haptic(); setResult({ repoUrl: `${repoUrl}/tree/${branch}`, commitUrl });
     } catch (e: any) { setError(e.message || 'Upload failed.'); setSheet(false); }
     finally { setBusy(''); }
   }
 
-  async function logout() {
+  const logout = useCallback(async () => {
     await fetch('/api/auth/logout', { method: 'POST' });
-    setSettings(false); setUser(null); setRepos([]); setTab(0); setRepo(null); setRaw([]); setResult(null);
-  }
+    setSettings(false); setUser(null); setRepos([]); tabRef.current = 0; setTab(0);
+    try { sessionStorage.removeItem('zg_repos'); } catch {} setRepo(null); setRaw([]); setResult(null);
+  }, []);
 
   const pct = prog.total ? Math.round((prog.done / prog.total) * 100) : 0;
   const dest = mode === 0 ? (newName || '—') : (repo?.full_name || '—');
-  const header = (
-    <GlassCard padding="10px 14px" radius="24px">
-      <div className="row" style={{ flexWrap: 'nowrap' }}>
-        <div className="brand">
-          {avatar ? <img className="avatar" decoding="async" src={avatar} alt="" width={30} height={30} /> : <GitHubIcon size={28} />}
-          <div><h1>Zip to GitHub</h1>{user && <small>@{user}</small>}</div>
-        </div>
-        <GlassButton variant="clear" size="md" icon={<GearIcon />} onClick={() => setSettings(true)} aria-label="Settings" />
-      </div>
-    </GlassCard>
-  );
+  const header = <Header avatar={avatar} user={user} onSettings={openSettings} />;
   const shell = (body: React.ReactNode) => (
     <>
       <Wallpaper a={ap.a} img={ap.img} />
       <main>{header}{body}</main>
-      <SettingsSheet open={settings} onClose={() => setSettings(false)} ap={ap} user={user} onSignOut={logout} />
+      <SettingsSheet open={settings} onClose={closeSettings} ap={ap} user={user} onSignOut={logout} />
     </>
   );
 
-  if (checking) return shell(<GlassCard><p>Loading…</p></GlassCard>);
+  if (checking) return shell(<GlassCard><div className="stack" role="status" aria-busy="true" aria-label="Loading"><div className="skel" style={{ width: '55%' }} /><div className="skel" /><div className="skel" style={{ width: '80%' }} /></div></GlassCard>);
   if (!user) {
     return shell(
       <GlassCard padding="28px 22px">
@@ -182,19 +216,13 @@ export default function Uploader() {
     );
   }
 
-  const nav = [
-    { label: 'Zip', icon: <UploadIcon /> },
-    { label: 'Repo', icon: <FolderIcon /> },
-    { label: 'Commit', icon: <CommitIcon /> },
-  ];
-
   return (
     <>
       <Wallpaper a={ap.a} img={ap.img} />
       <main>
         {header}
 
-        <div key={tab} className="step">
+        <div key={tab} className={'step ' + (dir.current > 0 ? 'fwd' : 'back')}>
         {tab === 0 && (
           <GlassCard>
             <div className="stack">
@@ -215,8 +243,8 @@ export default function Uploader() {
                   <div className="chips"><span className="chip">{files.length} files</span><span className="chip">{mb(total)}</span>{skipped.length > 0 && <span className="chip">{skipped.length} skipped</span>}</div>
                   {root && <div className="row"><span>Remove top folder “{root}”</span><GlassSwitch checked={strip} onChange={setStrip} aria-label={`Remove top folder ${root}`} /></div>}
                   {skipped.length > 0 && <p className="err">Skipped: {skipped.slice(0, 3).map((s) => `${s.path} (${s.reason})`).join(', ')}{skipped.length > 3 ? '…' : ''}</p>}
-                  <div className="list" tabIndex={0} aria-label="First files in the zip">{files.slice(0, 8).map((f) => <span key={f.path}>{f.path}</span>)}{files.length > 8 && <span>…and {files.length - 8} more</span>}</div>
-                  <GlassButton variant="filled" size="lg" onClick={() => setTab(1)}>Next: choose repository</GlassButton>
+                  <FileList files={files} />
+                  <GlassButton variant="filled" size="lg" onClick={() => goTab(1)}>Next: choose repository</GlassButton>
                 </>
               )}
             </div>
@@ -254,7 +282,7 @@ export default function Uploader() {
                 )}
               </div>
               {mode === 1 && repo && branch && branches.length > 0 && !branches.includes(branch) && <p>“{branch}” doesn’t exist yet and will be created from {repo.default_branch}.</p>}
-              <GlassButton variant="filled" size="lg" onClick={() => setTab(2)}>Next: commit</GlassButton>
+              <GlassButton variant="filled" size="lg" onClick={() => goTab(2)}>Next: commit</GlassButton>
             </div>
           </GlassCard>
         )}
@@ -292,7 +320,7 @@ export default function Uploader() {
         </div>
       </main>
 
-      <div className="navwrap"><GlassNav items={nav} activeIndex={tab} onChange={setTab} aria-label="Steps" /></div>
+      <Steps tab={tab} onChange={goTab} />
 
       <GlassSheet open={sheet} onClose={() => !busy && setSheet(false)} aria-label="Review files before uploading" detents={['medium', 'large']}>
         <div className="sheet">
@@ -302,11 +330,7 @@ export default function Uploader() {
               <p>{mode === 0 ? `New repo “${newName}”` : repo?.full_name} · branch {branch}</p>
               <div className="chips"><span className="chip">{plan.added.length} new</span><span className="chip">{plan.changed.length} overwritten</span><span className="chip">{plan.same} unchanged</span></div>
               {plan.truncated && <p className="err">The repository is very large; overwrite detection may be incomplete.</p>}
-              <div className="list" tabIndex={0} aria-label="Files to upload">
-                {plan.added.slice(0, 300).map((f) => <span key={f.path}>+ {f.path}</span>)}
-                {plan.changed.slice(0, 300).map((f) => <span key={f.path} className="err">~ {f.path}</span>)}
-                {plan.added.length + plan.changed.length > 600 && <span>…and more</span>}
-              </div>
+              <PlanList plan={plan} />
               {plan.changed.length > 0 && (
                 <div className="row"><span>Overwrite {plan.changed.length} existing file(s)</span><GlassSwitch checked={overwrite} onChange={setOverwrite} aria-label="Allow overwriting existing files" /></div>
               )}
@@ -321,7 +345,7 @@ export default function Uploader() {
           )}
         </div>
       </GlassSheet>
-      <SettingsSheet open={settings} onClose={() => setSettings(false)} ap={ap} user={user} onSignOut={logout} />
+      <SettingsSheet open={settings} onClose={closeSettings} ap={ap} user={user} onSignOut={logout} />
     </>
   );
 }
