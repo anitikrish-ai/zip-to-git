@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { GlassButton, GlassCard, GlassInput, GlassMenu, GlassNav, GlassSegmented, GlassSheet, GlassSwitch } from '@zakisheriff/liquid-glass';
 import { SettingsSheet, Wallpaper, useAppearance } from './Settings';
 import { CheckIcon, ChevronIcon, CommitIcon, FolderIcon, GearIcon, GitHubIcon, ShieldIcon, UploadIcon } from './icons';
@@ -67,7 +67,8 @@ export default function Uploader() {
     [raw, strip, root],
   );
   const total = files.reduce((n, f) => n + f.data.length, 0);
-  const shown = repos.filter((r) => r.full_name.toLowerCase().includes(filter.toLowerCase())).slice(0, 8);
+  const dFilter = useDeferredValue(filter);
+  const shown = useMemo(() => repos.filter((r) => r.full_name.toLowerCase().includes(dFilter.toLowerCase())).slice(0, 8), [repos, dFilter]);
 
   async function onZip(f?: File) {
     if (!f) return;
@@ -76,7 +77,7 @@ export default function Uploader() {
     if (f.size > LIMITS.maxZip) return setError(`Zip is larger than ${mb(LIMITS.maxZip)}.`);
     setBusy('Reading zip…');
     try {
-      const r = readZip(new Uint8Array(await f.arrayBuffer()));
+      const r = await readZip(new Uint8Array(await f.arrayBuffer()));
       if (!r.entries.length) throw new Error('No usable files found in the zip.');
       setRaw(r.entries); setSkipped(r.skipped); setZipName(f.name);
       if (!newName) setNewName(f.name.replace(/\.zip$/i, '').replace(/[^A-Za-z0-9._-]+/g, '-').slice(0, 100));
@@ -119,9 +120,13 @@ export default function Uploader() {
       } else repoUrl = `https://github.com/${owner}/${name}`;
       const todo = [...plan.added, ...plan.changed];
       if (!todo.length) { setSheet(false); return setError('Nothing to commit: every file already matches the repository.'); }
+      let raf = 0, last = { done: 0, total: 0, label: '' };
       const { commitUrl } = await commitFiles({
         owner, repo: name, branch, baseBranch: base, files: todo, message: message.trim(),
-        onProgress: (done, total, label) => setProg({ done, total, label }),
+        onProgress: (done, total, label) => {
+          last = { done, total, label };
+          if (!raf) raf = requestAnimationFrame(() => { raf = 0; setProg(last); });
+        },
       });
       setSheet(false);
       setResult({ repoUrl: `${repoUrl}/tree/${branch}`, commitUrl });
@@ -140,7 +145,7 @@ export default function Uploader() {
     <GlassCard padding="10px 14px" radius="24px">
       <div className="row" style={{ flexWrap: 'nowrap' }}>
         <div className="brand">
-          {avatar ? <img className="avatar" src={avatar} alt="" width={30} height={30} /> : <GitHubIcon size={28} />}
+          {avatar ? <img className="avatar" decoding="async" src={avatar} alt="" width={30} height={30} /> : <GitHubIcon size={28} />}
           <div><h1>Zip to GitHub</h1>{user && <small>@{user}</small>}</div>
         </div>
         <GlassButton variant="clear" size="md" icon={<GearIcon />} onClick={() => setSettings(true)} aria-label="Settings" />
@@ -189,6 +194,7 @@ export default function Uploader() {
       <main>
         {header}
 
+        <div key={tab} className="step">
         {tab === 0 && (
           <GlassCard>
             <div className="stack">
@@ -268,7 +274,7 @@ export default function Uploader() {
               </GlassButton>
               {busy && prog.label && (
                 <div role="status" aria-live="polite">
-                  <div className="bar"><i style={{ width: `${pct}%` }} /></div>
+                  <div className="bar"><i style={{ transform: `scaleX(${pct / 100})` }} /></div>
                   <p>{prog.total ? `${prog.done}/${prog.total} · ` : ''}{prog.label}</p>
                 </div>
               )}
@@ -283,6 +289,7 @@ export default function Uploader() {
             </div>
           </GlassCard>
         )}
+        </div>
       </main>
 
       <div className="navwrap"><GlassNav items={nav} activeIndex={tab} onChange={setTab} aria-label="Steps" /></div>
@@ -303,7 +310,7 @@ export default function Uploader() {
               {plan.changed.length > 0 && (
                 <div className="row"><span>Overwrite {plan.changed.length} existing file(s)</span><GlassSwitch checked={overwrite} onChange={setOverwrite} aria-label="Allow overwriting existing files" /></div>
               )}
-              {busy && <div role="status"><div className="bar"><i style={{ width: `${pct}%` }} /></div><p>{prog.label}</p></div>}
+              {busy && <div role="status"><div className="bar"><i style={{ transform: `scaleX(${pct / 100})` }} /></div><p>{prog.label}</p></div>}
               <div className="row">
                 <GlassButton variant="clear" onClick={() => setSheet(false)} disabled={!!busy}>Cancel</GlassButton>
                 <GlassButton variant="filled" onClick={upload} disabled={!!busy || (plan.changed.length > 0 && !overwrite)}>

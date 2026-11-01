@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { GlassButton, GlassSegmented, GlassSheet, GlassSlider } from '@zakisheriff/liquid-glass';
 import { DEFAULT_WALLPAPER, WALLPAPERS } from '@/lib/wallpapers';
 import { UploadIcon } from './icons';
@@ -21,7 +21,10 @@ export function useAppearance() {
   useEffect(() => {
     const r = document.documentElement;
     if (a.theme === 0) r.removeAttribute('data-theme'); else r.setAttribute('data-theme', a.theme === 1 ? 'light' : 'dark');
-    try { localStorage.setItem(KEY, JSON.stringify(a)); } catch {}
+  }, [a.theme]);
+  useEffect(() => {
+    const t = setTimeout(() => { try { localStorage.setItem(KEY, JSON.stringify(a)); } catch {} }, 250);
+    return () => clearTimeout(t);
   }, [a]);
   const set = (p: Partial<Appearance>) => setA((x) => ({ ...x, ...p }));
   const saveImg = (d: string | null) => {
@@ -32,16 +35,25 @@ export function useAppearance() {
   return { a, set, img, saveImg, warn, reset: () => { setA(DEFAULTS); saveImg(null); } };
 }
 
-export function Wallpaper({ a, img }: { a: Appearance; img: string | null }) {
+type Layer = { key: string; style: CSSProperties };
+export const Wallpaper = memo(function Wallpaper({ a, img }: { a: Appearance; img: string | null }) {
   const custom = a.wall === 'custom' && img;
   const css = WALLPAPERS.find((w) => w.id === a.wall)?.css ?? WALLPAPERS[0].css;
+  const key = custom ? 'img:' + img!.length : a.wall;
+  const style: CSSProperties = custom ? { backgroundImage: `url(${img})` } : { background: css };
+  const [layers, setLayers] = useState<Layer[]>(() => [{ key, style }]);
+  useEffect(() => {
+    setLayers((l) => (l[l.length - 1].key === key ? l : [...l.slice(-1), { key, style }]));
+    const t = setTimeout(() => setLayers((l) => l.slice(-1)), 800); // crossfade, then drop the old layer
+    return () => clearTimeout(t);
+  }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div className="wall" aria-hidden="true">
-      <div className="wall-img" style={custom ? { backgroundImage: `url(${img})` } : { background: css }} />
+      {layers.map((l) => <div key={l.key} className="wall-img" style={l.style} />)}
       <div className="wall-dim" style={{ opacity: a.dim / 100 }} />
     </div>
   );
-}
+});
 
 function downscale(file: File): Promise<string> {
   return new Promise((res, rej) => {

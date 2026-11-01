@@ -1,4 +1,4 @@
-import { unzipSync } from 'fflate';
+import { unzip } from 'fflate';
 
 export const LIMITS = {
   maxZip: 100 * 1024 * 1024,   // compressed upload
@@ -20,11 +20,15 @@ export function cleanPath(raw: string): string | null {
   return parts.length ? parts.join('/') : null;
 }
 
-export function readZip(buf: Uint8Array): { entries: Entry[]; skipped: Skipped[] } {
+export function readZip(buf: Uint8Array): Promise<{ entries: Entry[]; skipped: Skipped[] }> {
+  return new Promise((resolve, reject) => { try { parse(buf, resolve, reject); } catch (e) { reject(e); } });
+}
+
+function parse(buf: Uint8Array, resolve: (v: { entries: Entry[]; skipped: Skipped[] }) => void, reject: (e: Error) => void) {
   const skipped: Skipped[] = [];
   const clean = new Map<string, string>();
   let count = 0, total = 0, unsafe: string | null = null;
-  const out = unzipSync(buf, {
+  unzip(buf, {
     filter: (f) => {
       if (f.name.endsWith('/')) return false;
       if (/(^|\/)(__MACOSX\/|\.DS_Store$)/.test(f.name)) return false;
@@ -37,8 +41,9 @@ export function readZip(buf: Uint8Array): { entries: Entry[]; skipped: Skipped[]
       clean.set(f.name, p);
       return true;
     },
-  });
-  if (unsafe) throw new Error(`Unsafe path in zip ("${unsafe}"). Upload rejected.`);
+  }, (err, out) => {
+  if (err) return reject(err);
+  if (unsafe) return reject(new Error(`Unsafe path in zip ("${unsafe}"). Upload rejected.`));
   const seen = new Set<string>();
   const entries: Entry[] = [];
   for (const [name, data] of Object.entries(out)) {
@@ -49,7 +54,8 @@ export function readZip(buf: Uint8Array): { entries: Entry[]; skipped: Skipped[]
     entries.push({ path, data });
   }
   entries.sort((a, b) => a.path.localeCompare(b.path));
-  return { entries, skipped };
+  resolve({ entries, skipped });
+  });
 }
 
 /** Shared top-level folder name if every file lives under it. */
