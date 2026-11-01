@@ -1,0 +1,35 @@
+:root {
+  --bg: #eef1f7; --fg: #14161c; --muted: #5b6272; --danger: #d92d20; --ok: #12a150;
+  --blob1: #8ab4ff; --blob2: #ffb3d1; --blob3: #b8f0d0;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0d0f14; --fg: #f2f4f8; --muted: #9aa3b5; --blob1: #2b4a9a; --blob2: #7a2a55; --blob3: #1f6a4a; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  background: var(--bg); color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background-image:
+    radial-gradient(40vmax 40vmax at 10% 5%, var(--blob1), transparent 60%),
+    radial-gradient(35vmax 35vmax at 95% 40%, var(--blob2), transparent 60%),
+    radial-gradient(40vmax 40vmax at 20% 100%, var(--blob3), transparent 60%);
+  background-attachment: fixed;
+}
+main { max-width: 640px; margin: 0 auto; padding: 20px 16px 48px; display: grid; gap: 16px; }
+h1 { font-size: 1.6rem; margin: 8px 0 0; }
+h2 { font-size: 1.05rem; margin: 0 0 12px; }
+p { margin: 0 0 8px; color: var(--muted); font-size: .92rem; line-height: 1.45; }
+.stack { display: grid; gap: 12px; }
+.row { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.err { color: var(--danger); font-size: .9rem; word-break: break-word; }
+.ok { color: var(--ok); }
+.list { max-height: 38vh; overflow: auto; font: .8rem ui-monospace, Menlo, monospace; display: grid; gap: 2px; word-break: break-all; }
+.sheet { padding: 20px 20px calc(24px + env(safe-area-inset-bottom)); display: grid; gap: 12px; max-height: 80vh; overflow: auto; }
+.bar { height: 8px; border-radius: 99px; background: rgba(128,128,128,.25); overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--ok); transition: width .2s; }
+.pick { display: grid; gap: 6px; }
+a { color: inherit; font-weight: 600; word-break: break-all; }
+input[type=file] { display: none; }
+@media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } }
