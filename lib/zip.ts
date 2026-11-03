@@ -1,5 +1,4 @@
-import { unzip } from 'fflate';
-
+// Zip handling. The parser (and fflate) live in a lazily loaded chunk.
 export const LIMITS = {
   maxZip: 100 * 1024 * 1024,   // compressed upload
   maxTotal: 150 * 1024 * 1024, // total extracted
@@ -8,6 +7,7 @@ export const LIMITS = {
 };
 export type Entry = { path: string; data: Uint8Array };
 export type Skipped = { path: string; reason: string };
+type Result = { entries: Entry[]; skipped: Skipped[] };
 
 /** Returns a safe relative path, or null if the name is dangerous. */
 export function cleanPath(raw: string): string | null {
@@ -20,43 +20,10 @@ export function cleanPath(raw: string): string | null {
   return parts.length ? parts.join('/') : null;
 }
 
-export function readZip(buf: Uint8Array): Promise<{ entries: Entry[]; skipped: Skipped[] }> {
-  return new Promise((resolve, reject) => { try { parse(buf, resolve, reject); } catch (e) { reject(e); } });
-}
-
-function parse(buf: Uint8Array, resolve: (v: { entries: Entry[]; skipped: Skipped[] }) => void, reject: (e: Error) => void) {
-  const skipped: Skipped[] = [];
-  const clean = new Map<string, string>();
-  let count = 0, total = 0, unsafe: string | null = null;
-  unzip(buf, {
-    filter: (f) => {
-      if (f.name.endsWith('/')) return false;
-      if (/(^|\/)(__MACOSX\/|\.DS_Store$)/.test(f.name)) return false;
-      const p = cleanPath(f.name);
-      if (!p) { unsafe = unsafe || f.name; return false; }
-      if (f.originalSize > LIMITS.maxFile) { skipped.push({ path: p, reason: 'Larger than 3 MB' }); return false; }
-      if (++count > LIMITS.maxFiles) throw new Error(`Too many files (limit ${LIMITS.maxFiles}).`);
-      total += f.originalSize;
-      if (total > LIMITS.maxTotal) throw new Error('Archive expands beyond the size limit.');
-      clean.set(f.name, p);
-      return true;
-    },
-  }, (err, out) => {
-  if (err) return reject(err);
-  if (unsafe) return reject(new Error(`Unsafe path in zip ("${unsafe}"). Upload rejected.`));
-  const seen = new Set<string>();
-  const entries: Entry[] = [];
-  for (const [name, data] of Object.entries(out)) {
-    const path = clean.get(name)!;
-    if (data.length > LIMITS.maxFile) { skipped.push({ path, reason: 'Larger than 3 MB' }); continue; }
-    if (seen.has(path)) { skipped.push({ path, reason: 'Duplicate path' }); continue; }
-    seen.add(path);
-    entries.push({ path, data });
-  }
-  entries.sort((a, b) => a.path.localeCompare(b.path));
-  resolve({ entries, skipped });
-  });
-}
+// fflate is loaded on demand (not in the initial bundle) and prefetched at idle time.
+const load = () => import('./zip-parse');
+export function prefetchZip() { load().catch(() => {}); }
+export function readZip(buf: Uint8Array): Promise<Result> { return load().then((m) => m.parseZip(buf)); }
 
 /** Shared top-level folder name if every file lives under it. */
 export function commonRoot(entries: Entry[]): string | null {

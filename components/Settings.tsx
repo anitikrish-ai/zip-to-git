@@ -38,11 +38,13 @@ export function useAppearance() {
   }, [a, img, warn]);
 }
 
+const autoId = () => { const h = new Date().getHours(); return h < 6 || h >= 21 ? 'graphite' : h < 11 ? 'sky' : h < 17 ? 'ocean' : 'dune'; };
 type Layer = { key: string; style: CSSProperties };
 export const Wallpaper = memo(function Wallpaper({ a, img }: { a: Appearance; img: string | null }) {
   const custom = a.wall === 'custom' && img;
-  const css = WALLPAPERS.find((w) => w.id === a.wall)?.css ?? WALLPAPERS[0].css;
-  const key = custom ? 'img:' + img!.length : a.wall;
+  const wid = a.wall === 'auto' ? autoId() : a.wall;
+  const css = WALLPAPERS.find((w) => w.id === wid)?.css ?? WALLPAPERS[0].css;
+  const key = custom ? 'img:' + img!.length : wid;
   const style: CSSProperties = custom ? { backgroundImage: `url(${img})` } : { background: css };
   const [layers, setLayers] = useState<Layer[]>(() => [{ key, style }]);
   useEffect(() => {
@@ -106,6 +108,10 @@ export const SettingsSheet = memo(function SettingsSheet(p: {
         <section className="stack" aria-label="Wallpaper">
           <h3>Wallpaper</h3>
           <div className="swatches" role="radiogroup" aria-label="Wallpaper">
+            <button role="radio" aria-checked={a.wall === 'auto'} aria-label="Auto, changes with the time of day"
+              className={'swatch' + (a.wall === 'auto' ? ' on' : '')} style={{ background: 'linear-gradient(135deg,#d9ecff,#0a84ff 50%,#3b1d0e)' }} onClick={() => set({ wall: 'auto' })}>
+              <span>Auto</span>
+            </button>
             {WALLPAPERS.map((w) => (
               <button key={w.id} role="radio" aria-checked={a.wall === w.id} aria-label={w.name}
                 className={'swatch' + (a.wall === w.id ? ' on' : '')} style={{ background: w.css }} onClick={() => set({ wall: w.id })}>

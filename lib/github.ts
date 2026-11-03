@@ -54,10 +54,17 @@ export async function makePlan(owner: string, repo: string, source: string, file
   const map = new Map<string, string>();
   for (const t of tree.tree) if (t.type === 'blob') map.set(t.path, t.sha);
   const p: Plan = { added: [], changed: [], same: 0, truncated: !!tree.truncated };
+  const existing = files.filter((f) => map.has(f.path));
+  const shas = new Map<string, string>();
+  for (let i = 0; i < existing.length; i += 64) {
+    const batch = existing.slice(i, i + 64);
+    const out = await Promise.all(batch.map((f) => gitSha(f.data)));
+    batch.forEach((f, j) => shas.set(f.path, out[j]));
+  }
   for (const f of files) {
     const old = map.get(f.path);
     if (!old) p.added.push(f);
-    else if (old === (await gitSha(f.data))) p.same++;
+    else if (old === shas.get(f.path)) p.same++;
     else p.changed.push(f);
   }
   return p;
@@ -69,7 +76,7 @@ export async function createRepo(name: string, priv: boolean) {
 
 export async function commitFiles(o: {
   owner: string; repo: string; branch: string; baseBranch: string; files: Entry[]; message: string;
-  onProgress: (done: number, total: number, label: string) => void;
+  onProgress: (done: number, total: number, label: string) => void; shouldCancel?: () => boolean;
 }): Promise<{ commitUrl: string }> {
   const R = `repos/${o.owner}/${o.repo}`;
   let parent: string, create = false;
@@ -84,12 +91,14 @@ export async function commitFiles(o: {
   let done = 0, i = 0;
   await Promise.all(Array.from({ length: 4 }, async () => {
     while (i < o.files.length) {
+      if (o.shouldCancel?.()) throw new GhError('Upload cancelled. Nothing was committed.', 0);
       const f = o.files[i++];
       const r = await gh<any>(`${R}/git/blobs`, { method: 'POST', body: JSON.stringify({ content: b64(f.data), encoding: 'base64' }) });
       entries.push({ path: f.path, mode: '100644', type: 'blob', sha: r.sha });
       o.onProgress(++done, o.files.length, f.path);
     }
   }));
+  if (o.shouldCancel?.()) throw new GhError('Upload cancelled. Nothing was committed.', 0);
   o.onProgress(done, o.files.length, 'Creating commit…');
   const tree = await gh<any>(`${R}/git/trees`, { method: 'POST', body: JSON.stringify({ base_tree: base, tree: entries }) });
   const c = await gh<any>(`${R}/git/commits`, { method: 'POST', body: JSON.stringify({ message: o.message, tree: tree.sha, parents: [parent] }) });
@@ -102,4 +111,8 @@ export async function commitFiles(o: {
     throw e;
   }
   return { commitUrl: c.html_url };
+}
+
+export async function createPR(owner: string, repo: string, b: { title: string; head: string; base: string; body: string }) {
+  return gh<any>(`repos/${owner}/${repo}/pulls`, { method: 'POST', body: JSON.stringify(b) });
 }
