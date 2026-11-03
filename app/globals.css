@@ -48,7 +48,8 @@ p { margin: 0; color: var(--muted); font-size: .9rem; line-height: 1.45; }
 .swatch:active { transform: scale(.96); }
 .swatch.on { border-color: #fff; box-shadow: 0 0 0 2px #0a84ff; }
 .swatch:focus-visible { outline: 2px solid #0a84ff; outline-offset: 2px; }
-.navwrap { position: fixed; left: 0; right: 0; bottom: 0; z-index: 5; display: flex; justify-content: center; padding: 0 16px calc(12px + env(safe-area-inset-bottom)); pointer-events: none; }
+/* Sized and centred against the full window width (100vw), so a scrollbar appearing/disappearing never moves or resizes the bar. */
+.navwrap { position: fixed; left: 0; width: 100vw; bottom: 0; z-index: 5; display: flex; justify-content: center; padding: 0 16px calc(12px + env(safe-area-inset-bottom)); pointer-events: none; }
 .navwrap > * { pointer-events: auto; max-width: 420px; width: 100%; }
 .chipbtn { border: 0; color: inherit; font: inherit; font-size: .78rem; cursor: pointer; transition: transform .15s ease; }
 .chipbtn:active { transform: scale(.95); }
