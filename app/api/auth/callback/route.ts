@@ -15,7 +15,9 @@ export async function GET(req: Request) {
   const a = Buffer.from(state), b = Buffer.from(saved);
   if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return fail('state');
 
-  const r = await fetch('https://github.com/login/oauth/access_token', {
+  let j: any = {};
+  try {
+    const r = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -25,7 +27,8 @@ export async function GET(req: Request) {
       redirect_uri: `${base}/api/auth/callback`,
     }),
   });
-  const j = await r.json().catch(() => ({}));
+    j = await r.json().catch(() => ({}));
+  } catch { return fail('token'); }
   if (!j.access_token) return fail('token');
   const res = NextResponse.redirect(`${base}/`);
   res.cookies.set(COOKIE, seal(j.access_token), { ...cookieOpts, maxAge: 60 * 60 * 8 });

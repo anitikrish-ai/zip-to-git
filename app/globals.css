@@ -57,6 +57,10 @@ p { margin: 0; color: var(--muted); font-size: .9rem; line-height: 1.45; }
 .toastwrap { position: fixed; left: 0; right: 0; top: calc(10px + env(safe-area-inset-top)); z-index: 2000; display: flex; justify-content: center; padding: 0 16px; pointer-events: none; animation: toastIn .35s cubic-bezier(.22,1,.36,1) both; }
 @keyframes toastIn { from { opacity: 0; transform: translateY(-14px) scale(.97); } to { opacity: 1; transform: none; } }
 .warn { border-radius: 16px; padding: 12px; background: rgba(217,45,32,.12); border: 1px solid rgba(217,45,32,.35); }
+.rowbtn { background: none; border: 0; color: inherit; font: inherit; text-align: left; padding: 0; cursor: pointer; word-break: break-all; }
+.rowbtn:focus-visible { outline: 2px solid #0a84ff; outline-offset: 2px; }
+.readme, .diff { font: .78rem ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-all; max-height: 30vh; overflow: auto; margin: 0; padding: 10px; border-radius: 12px; background: var(--chip); overscroll-behavior: contain; }
+.diff span { display: block; } .diff .da { color: var(--ok); } .diff .dr { color: var(--danger); } .diff .dc { color: var(--muted); }
 .hist p { font-size: .8rem; }
 a { color: inherit; font-weight: 600; word-break: break-all; }
 .step.fwd { animation-name: stepInFwd; }

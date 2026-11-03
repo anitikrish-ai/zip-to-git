@@ -3,15 +3,18 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { GlassButton, GlassCard, GlassInput, GlassMenu, GlassNav, GlassSegmented, GlassSheet, GlassSwitch, haptic } from '@zakisheriff/liquid-glass';
 import { SettingsSheet, Wallpaper, useAppearance } from './Settings';
 import { CheckIcon, ChevronIcon, CommitIcon, FolderIcon, GearIcon, GitHubIcon, ShieldIcon, UploadIcon } from './icons';
-import { GhError, createPR, createRepo, commitFiles, gh, makePlan, type Plan } from '@/lib/github';
+import { GhError, createPR, createRepo, commitFiles, getBlob, gh, makePlan, onGhRate, onGhWait, undoCommit, type Plan } from '@/lib/github';
+import { compact, lineDiff, type DiffLine } from '@/lib/diff';
 import { LIMITS, cleanPath, commonRoot, readZip, prefetchZip, type Entry, type Skipped } from '@/lib/zip';
 import { groupOf, groups, scan, topLangs, type Finding } from '@/lib/scan';
 
-type Hist = { at: number; repo: string; branch: string; count: number; message: string; repoUrl: string; commitUrl: string; prUrl?: string };
+type Hist = { at: number; repo: string; branch: string; count: number; message: string; repoUrl: string; commitUrl: string; prUrl?: string; owner?: string; name?: string; commitSha?: string; parent?: string; undone?: boolean };
 type Preset = { repo: string; branch: string; message: string };
 type Repo = { name: string; full_name: string; owner: { login: string }; default_branch: string; private: boolean };
+const GI = ['', 'Node', 'Python', 'Java', 'Go', 'Rust', 'Ruby', 'Swift', 'Dart', 'Unity'];
+const LIC = ['', 'mit', 'apache-2.0', 'gpl-3.0', 'bsd-3-clause', 'unlicense'];
 const REPO_RE = /^[A-Za-z0-9._-]{1,100}$/;
-const BRANCH_RE = /^(?!\/|.*(\.\.|\/\/|@\{|\\))[A-Za-z0-9._\/-]{1,200}(?<![\/.])$/;
+const BRANCH_RE = /^(?!\/|.*(\.\.|\/\/|@\{|\\))[A-Za-z0-9._\/-]{0,199}[A-Za-z0-9_-]$/; // no lookbehind: it breaks Safari < 16.4
 const mb = (n: number) => (n / 1048576).toFixed(1) + ' MB';
 
 
@@ -39,11 +42,11 @@ const Header = memo(function Header({ avatar, user, onSettings }: { avatar: stri
 const FileList = memo(function FileList({ files }: { files: Entry[] }) {
   return <div className="list" tabIndex={0} aria-label="First files in the zip">{files.slice(0, 8).map((f) => <span key={f.path}>{f.path}</span>)}{files.length > 8 && <span>…and {files.length - 8} more</span>}</div>;
 });
-const PlanList = memo(function PlanList({ plan }: { plan: Plan }) {
+const PlanList = memo(function PlanList({ plan, onOpen }: { plan: Plan; onOpen: (f: Entry) => void }) {
   return (
     <div className="list" tabIndex={0} aria-label="Files to upload">
       {plan.added.slice(0, 300).map((f) => <span key={f.path}>+ {f.path}</span>)}
-      {plan.changed.slice(0, 300).map((f) => <span key={f.path} className="err">~ {f.path}</span>)}
+      {plan.changed.slice(0, 300).map((f) => <button key={f.path} className="rowbtn err" onClick={() => onOpen(f)} aria-label={`Show changes to ${f.path}`}>~ {f.path}</button>)}
       {plan.added.length + plan.changed.length > 600 && <span>…and more</span>}
     </div>
   );
@@ -104,9 +107,19 @@ export default function Uploader() {
   const [histSheet, setHistSheet] = useState(false);
   const [toast, setToast] = useState<{ msg: string; err?: boolean } | null>(null);
   const notify = useCallback((msg: string, err = false) => setToast({ msg, err }), []);
+  const [branchExists, setBranchExists] = useState(false);
+  const [waitMsg, setWaitMsg] = useState('');
+  const [rate, setRate] = useState<number | null>(null);
+  const [diffView, setDiffView] = useState<{ path: string; lines: DiffLine[] | null; note: string } | null>(null);
+  const [desc, setDesc] = useState('');
+  const [gi, setGi] = useState('');
+  const [lic, setLic] = useState('');
+  const [confirmUndo, setConfirmUndo] = useState<number | null>(null);
+  useEffect(() => { onGhWait(setWaitMsg); onGhRate(setRate); return () => { onGhWait(null); onGhRate(null); }; }, []);
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 3800); return () => clearTimeout(t); }, [toast]);
   useEffect(() => {
-    try { setHistory(JSON.parse(localStorage.getItem('zg_history') || '[]')); setPresets(JSON.parse(localStorage.getItem('zg_presets') || '[]')); } catch {}
+    try { setHistory(JSON.parse(localStorage.getItem('zg_history') || '[]')); } catch {}
+    try { setPresets(JSON.parse(localStorage.getItem('zg_presets') || '[]')); } catch {}
   }, []);
 
   useEffect(() => {
@@ -134,6 +147,10 @@ export default function Uploader() {
   const groupsList = useMemo(() => groups(stripped), [stripped]);
   const files = useMemo(() => stripped.filter((f) => !off.has(groupOf(f.path)) && !exFiles.has(f.path)), [stripped, off, exFiles]);
   const langs = useMemo(() => topLangs(files), [files]);
+  const readme = useMemo(() => {
+    const f = files.find((x) => /^readme(\.md|\.markdown|\.txt)?$/i.test(x.path));
+    return f ? new TextDecoder().decode(f.data.subarray(0, 4000)).split('\n').slice(0, 14).join('\n') : '';
+  }, [files]);
   const owners = useMemo(() => [...new Set(repos.map((r) => r.owner.login))], [repos]);
   const total = useMemo(() => files.reduce((n, f) => n + f.data.length, 0), [files]);
   const dFilter = useDeferredValue(filter);
@@ -181,14 +198,19 @@ export default function Uploader() {
 
   async function review() {
     const v = validate(); if (v) return setError(v);
-    setError(''); setOverwrite(false); setAck(false); setResult(null); setBusy('Scanning for secrets…');
+    setError(''); setOverwrite(false); setAck(false); setResult(null); setDiffView(null); setBusy('Scanning for secrets…');
     try {
       setFindings(await scan(files));
       if (mode === 0) setPlan({ added: files, changed: [], same: 0, truncated: false });
       else {
         setBusy('Comparing with the repository…');
-        const source = branches.includes(branch) ? branch : repo!.default_branch;
-        setPlan(await makePlan(repo!.owner.login, repo!.name, source, files));
+        let exists = branches.includes(branch);   // the list holds at most 100 branches, so confirm with GitHub
+        if (!exists) {
+          try { await gh(`repos/${repo!.owner.login}/${repo!.name}/git/ref/heads/${branch}`); exists = true; }
+          catch (e) { if (!(e instanceof GhError && e.status === 404)) throw e; }
+        }
+        setBranchExists(exists);
+        setPlan(await makePlan(repo!.owner.login, repo!.name, exists ? branch : repo!.default_branch, files));
       }
       setSheet(true);
     } catch (e: any) {
@@ -216,14 +238,14 @@ export default function Uploader() {
       let owner = repo?.owner.login || '', name = repo?.name || '', base = repo?.default_branch || 'main', repoUrl = '';
       if (mode === 0) {
         setProg({ done: 0, total: 0, label: 'Creating repository…' });
-        const r = await createRepo(newName, priv);
+        const r = await createRepo(newName, priv, { description: desc.trim(), gitignore: gi, license: lic });
         owner = r.owner.login; name = r.name; base = r.default_branch; repoUrl = r.html_url;
       } else repoUrl = `https://github.com/${owner}/${name}`;
       const usePr = pr && mode === 1;
-      const from = usePr && branches.includes(branch) ? branch : base;
+      const from = usePr && branchExists ? branch : base;
       const head = usePr ? `zip2gh/${Date.now().toString(36)}` : branch;
       let raf = 0, last = { done: 0, total: 0, label: '' };
-      const { commitUrl } = await commitFiles({
+      const { commitUrl, commitSha, parent } = await commitFiles({
         owner, repo: name, branch: head, baseBranch: from, files: todo, message: message.trim(),
         shouldCancel: () => cancelRef.current,
         onProgress: (done, total, label) => {
@@ -235,10 +257,32 @@ export default function Uploader() {
       if (usePr) prUrl = (await createPR(owner, name, { title: message.trim().split('\n')[0].slice(0, 200), head, base: from, body: 'Uploaded with zip2gh' })).html_url;
       const res = { repoUrl: `${repoUrl}/tree/${head}`, commitUrl, prUrl };
       setSheet(false); haptic(); setResult(res); notify(usePr ? 'Pull request opened.' : 'Committed to GitHub.');
-      const h: Hist = { at: Date.now(), repo: `${owner}/${name}`, branch: head, count: todo.length, message: message.trim().slice(0, 120), ...res };
+      const h: Hist = { at: Date.now(), repo: `${owner}/${name}`, branch: head, count: todo.length, message: message.trim().slice(0, 120), ...res, ...(usePr ? {} : { owner, name, commitSha, parent }) };
       setHistory((x) => { const n = [h, ...x].slice(0, 30); try { localStorage.setItem('zg_history', JSON.stringify(n)); } catch {} return n; });
     } catch (e: any) { setError(e.message || 'Upload failed.'); notify(e.message || 'Upload failed.', true); setSheet(false); }
     finally { setBusy(''); }
+  }
+
+  async function openDiff(f: Entry) {
+    const sha = plan?.oldSha?.[f.path]; if (!sha || !repo) return;
+    setDiffView({ path: f.path, lines: null, note: 'Loading…' });
+    try {
+      const b = await getBlob(repo.owner.login, repo.name, sha);
+      const old = Uint8Array.from(atob(b.content.replace(/\n/g, '')), (c) => c.charCodeAt(0));
+      if (old.length > 200_000 || f.data.length > 200_000 || old.subarray(0, 1000).includes(0) || f.data.subarray(0, 1000).includes(0))
+        return setDiffView({ path: f.path, lines: null, note: `Binary or large file (${old.length} → ${f.data.length} bytes): no text diff.` });
+      const d = lineDiff(new TextDecoder().decode(old), new TextDecoder().decode(f.data));
+      setDiffView({ path: f.path, lines: d && compact(d), note: d ? '' : 'This file is too long for an inline diff.' });
+    } catch (e: any) { setDiffView({ path: f.path, lines: null, note: e.message || 'Could not load the old version.' }); }
+  }
+  async function undo(h: Hist) {
+    if (confirmUndo !== h.at) { setConfirmUndo(h.at); setTimeout(() => setConfirmUndo((c) => (c === h.at ? null : c)), 5000); return; }
+    setConfirmUndo(null);
+    try {
+      await undoCommit(h.owner!, h.name!, h.branch, h.commitSha!, h.parent!);
+      setHistory((x) => { const n = x.map((y) => (y.at === h.at ? { ...y, undone: true } : y)); try { localStorage.setItem('zg_history', JSON.stringify(n)); } catch {} return n; });
+      notify('Upload undone. The branch is back to its previous state.');
+    } catch (e: any) { notify(e.message || 'Could not undo.', true); }
   }
 
   const excludeFlagged = () => {
@@ -343,6 +387,7 @@ export default function Uploader() {
                     </div>
                   )}
                   <FileList files={files} />
+                  {readme && <div className="stack"><h3>README preview</h3><pre className="readme" aria-label="README preview">{readme}</pre></div>}
                   <GlassButton variant="filled" size="lg" onClick={() => goTab(1)}>Next: choose repository</GlassButton>
                 </>
               )}
@@ -360,6 +405,10 @@ export default function Uploader() {
                 <>
                   <GlassInput label="Repository name" value={newName} onChange={(e) => setNewName(e.target.value)} autoCapitalize="none" autoCorrect="off" />
                   <div className="row"><span>Private repository</span><GlassSwitch checked={priv} onChange={setPriv} aria-label="Private repository" /></div>
+                  <GlassInput label="Description (optional)" value={desc} onChange={(e) => setDesc(e.target.value)} maxLength={200} />
+                  <div className="row"><span>.gitignore: {gi || 'None'}</span><GlassMenu icon={<ChevronIcon />} aria-label="Pick a .gitignore template" items={GI.map((g) => ({ label: g || 'None', checked: g === gi, onSelect: () => setGi(g) }))} /></div>
+                  <div className="row"><span>License: {lic ? lic.toUpperCase() : 'None'}</span><GlassMenu icon={<ChevronIcon />} aria-label="Pick a license" items={LIC.map((l) => ({ label: l ? l.toUpperCase() : 'None', checked: l === lic, onSelect: () => setLic(l) }))} /></div>
+                  <p>If your zip has its own .gitignore or LICENSE, it replaces the generated one.</p>
                 </>
               ) : (
                 <>
@@ -405,6 +454,7 @@ export default function Uploader() {
                 <button className="chip chipbtn" onClick={() => setMessage(suggest)}>Suggest message</button>
                 <button className="chip chipbtn" onClick={savePreset}>Save preset</button>
                 <button className="chip chipbtn" onClick={() => setHistSheet(true)}>History ({history.length})</button>
+                {rate !== null && <span className="chip" title="GitHub API calls left this hour">API calls left: {rate.toLocaleString('en-US')}</span>}
               </div>
               {mode === 1 && <div className="row"><span>Open a pull request instead</span><GlassSwitch checked={pr} onChange={setPr} aria-label="Open a pull request instead of committing directly" /></div>}
               <div className="row"><span>Dry run (write nothing)</span><GlassSwitch checked={dry} onChange={setDry} aria-label="Dry run" /></div>
@@ -417,6 +467,7 @@ export default function Uploader() {
                   <p>{prog.total ? `${prog.done}/${prog.total} · ` : ''}{prog.label}</p>
                 </div>
               )}
+              {waitMsg && <p role="status" aria-live="polite">{waitMsg}</p>}
               {error && <div className="err" role="alert">{error}</div>}
               {result && (
                 <div className="stack" role="status">
@@ -438,7 +489,7 @@ export default function Uploader() {
 
       <Steps tab={tab} onChange={goTab} />
 
-      <GlassSheet open={sheet} onClose={() => !busy && setSheet(false)} aria-label="Review files before uploading" detents={['medium', 'large']}>
+      <GlassSheet open={sheet} onClose={() => !busy && setSheet(false)} aria-label="Review files before uploading">
         <div className="sheet">
           <h2>Review</h2>
           {plan && (
@@ -446,7 +497,15 @@ export default function Uploader() {
               <p>{mode === 0 ? `New repo “${newName}”` : repo?.full_name} · branch {branch}</p>
               <div className="chips"><span className="chip">{plan.added.length} new</span><span className="chip">{plan.changed.length} overwritten</span><span className="chip">{plan.same} unchanged</span></div>
               {plan.truncated && <p className="err">The repository is very large; overwrite detection may be incomplete.</p>}
-              <PlanList plan={plan} />
+              <PlanList plan={plan} onOpen={openDiff} />
+              {plan.changed.length > 0 && <p>Tap an overwritten file (~) to see what changes.</p>}
+              {diffView && (
+                <div className="stack" role="region" aria-label="File changes">
+                  <div className="row"><strong>{diffView.path}</strong><button className="chip chipbtn" onClick={() => setDiffView(null)}>Close</button></div>
+                  {diffView.note && <p>{diffView.note}</p>}
+                  {diffView.lines && <pre className="diff">{diffView.lines.map((l, i) => <span key={i} className={l.t === '+' ? 'da' : l.t === '-' ? 'dr' : l.t === '…' ? 'dc' : ''}>{l.t === '…' ? l.s : l.t + ' ' + l.s}</span>)}</pre>}
+                </div>
+              )}
               {findings.length > 0 && (
                 <div className="stack warn" role="alert">
                   <strong>{findings.length} possible secret{findings.length > 1 ? 's' : ''} found</strong>
@@ -460,7 +519,7 @@ export default function Uploader() {
               {plan.changed.length > 0 && (
                 <div className="row"><span>Overwrite {plan.changed.length} existing file(s)</span><GlassSwitch checked={overwrite} onChange={setOverwrite} aria-label="Allow overwriting existing files" /></div>
               )}
-              {busy && <div role="status"><div className="bar"><i style={{ transform: `scaleX(${pct / 100})` }} /></div><p>{prog.label}</p></div>}
+              {busy && <div role="status"><div className="bar"><i style={{ transform: `scaleX(${pct / 100})` }} /></div><p>{prog.label}</p>{waitMsg && <p>{waitMsg}</p>}</div>}
               <div className="row">
                 <GlassButton variant="clear" onClick={() => { if (busy) cancelRef.current = true; else setSheet(false); }}>{busy ? 'Cancel upload' : 'Cancel'}</GlassButton>
                 <GlassButton variant="filled" onClick={upload} disabled={!!busy || (plan.changed.length > 0 && !overwrite) || (findings.length > 0 && !ack)}>
@@ -471,7 +530,7 @@ export default function Uploader() {
           )}
         </div>
       </GlassSheet>
-      <GlassSheet open={histSheet} onClose={() => setHistSheet(false)} aria-label="Upload history" detents={['medium', 'large']}>
+      <GlassSheet open={histSheet} onClose={() => setHistSheet(false)} aria-label="Upload history">
         <div className="sheet">
           <h2>History</h2>
           {!history.length && <p>No uploads yet.</p>}
@@ -479,6 +538,7 @@ export default function Uploader() {
             <div key={h.at} className="stack hist">
               <a href={h.prUrl || h.repoUrl} target="_blank" rel="noopener noreferrer">{h.repo} @ {h.branch}</a>
               <p>{new Date(h.at).toLocaleString()} · {h.count} files · {h.message}</p>
+              {h.undone ? <span className="chip">Undone</span> : h.commitSha && <button className="chip chipbtn" onClick={() => undo(h)}>{confirmUndo === h.at ? 'Tap again to confirm undo' : 'Undo this upload'}</button>}
             </div>
           ))}</div>
           <div className="row">

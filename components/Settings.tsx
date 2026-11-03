@@ -93,7 +93,7 @@ export const SettingsSheet = memo(function SettingsSheet(p: {
     if (file.current) file.current.value = '';
   }
   return (
-    <GlassSheet open={p.open} onClose={p.onClose} aria-label="Settings" detents={['medium', 'large']}>
+    <GlassSheet open={p.open} onClose={p.onClose} aria-label="Settings">
       <div className="sheet">
         <h2>Settings</h2>
         <section className="stack" aria-label="Appearance">
